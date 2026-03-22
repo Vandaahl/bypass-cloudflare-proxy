@@ -1,21 +1,23 @@
 services:
-  bypass-cloudflare-proxy:
+  unflare:
     build: .
-    image: bypass-cloudflare-proxy
-    container_name: bypass-cloudflare-proxy
+    image: unflare
+    container_name: unflare
     ports:
       - "5002:5002"
 
-  unflare-addon:
-    image: bypass-cloudflare-proxy
-    container_name: unflare-addon
+  bypass-cloudflare-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.addon
+    container_name: bypass-cloudflare-proxy
     command: node script.js
     ports:
       - "5003:5003"
     environment:
-      - UNFLARE_URL=http://bypass-cloudflare-proxy:5002
+      - UNFLARE_URL=http://unflare:5002
       - ADDON_PORT=5003
     depends_on:
-      - bypass-cloudflare-proxy
+      - unflare
     volumes:
       - ./script.js:/usr/src/app/script.js

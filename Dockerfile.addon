@@ -1,0 +1,17 @@
+FROM node:22-slim
+
+# Set work directory
+WORKDIR /usr/src/app
+
+# Install dependencies (only the ones needed by script.js)
+# axios, express, cors
+RUN npm install axios express cors
+
+# Copy the script itself
+COPY script.js .
+
+# Ensure the addon port is exposed
+EXPOSE 5003
+
+# Start the script
+CMD ["node", "script.js"]

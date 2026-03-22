@@ -1,124 +1,91 @@
-## **Unflare**
-A Node.js API service that bypasses Cloudflare protection. It uses `puppeteer-real-browser` to automatically solve challenges and returns the necessary cookies and headers for you to make subsequent requests directly to the target website.  
+# Bypass Cloudflare Proxy
 
-The main idea behind Unflare is that it handles the Cloudflare protection page — the one you see when visiting a site protected by Cloudflare — and returns a valid `cf_clearance` token. This token proves the challenge was solved and allows your own scripts or browser to access the page without going through the challenge again.
+**AI was used to help create this project**
 
-**The preferred way to run it is by** using Docker (scroll to the bottom of the Readme)
+A dual-service Node.js solution to bypass Cloudflare protection and proxy requests seamlessly. This project consists of two main components:
+1. **Unflare Service**: A headless browser-based API that solves Cloudflare challenges and returns clearance cookies and headers.
+2. **Addon Proxy (bypass-cloudflare-proxy)**: A lightweight Node.js server that uses the Unflare service to proxy GET requests, providing a seamless browsing experience even behind Cloudflare.
 
-### **Key Features**
-- Handles **GET** and **POST (form data)** requests
-- Supports **proxy configuration** (Host/Port/Auth)
-- Includes **logging**
-- Takes **automatic screenshots** on errors or Cloudflare blocks
-	- The screenshots are saved at `/screenshots` inside the container
-    
-### **Requirements**
-- **Node.js 14+**
-- **Linux** requires `Xvfb` package (if not using Docker)
-- **Docker image** includes all dependencies
+## Features
 
-### **API Usage**
-Send a `POST` request to `/scrape` with a JSON body:
+- **Cloudflare Bypass**: Automatically solves Cloudflare challenges using Puppeteer and `puppeteer-real-browser`.
+- **Automatic Header/Cookie Injection**: Proxies requests with the necessary headers and cookies obtained from Unflare.
+- **URL Rewriting**: Rewrites links, images, and other resources in HTML/CSS to ensure they also go through the proxy.
+- **XML Filtering**: Can filter RSS/XML feeds by category.
+- **Efficient Architecture**: Uses a lightweight `node:slim` image for the proxy service, while the heavy browser logic is isolated in the Unflare service.
 
-| Field     | Type   | Required | Description                                |
-| --------- | ------ | -------- | ------------------------------------------ |
-| `url`     | string | yes      | Target URL                                 |
-| `timeout` | number | yes      | Max time in milliseconds                   |
-| `method`  | string | no       | HTTP method: `"GET"` (default) or `"POST"` |
-| `data`    | object | no       | Form data for POST requests                |
-| `proxy`   | object | no       | `{ host, port, username, password }`<br>   |
+## Prerequisites
 
-### **Example Request**
-```json
-{
-  "url": "https://example.com",
-  "timeout": 60000,
-  "method": "GET",
-  "proxy": {
-    "host": "proxy.example.com",
-    "port": 8080,
-    "username": "user",
-    "password": "pass"
-  }
-}
+- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/) installed.
+
+## Getting Started
+
+To start the services, simply run:
+
+```bash
+docker-compose up -d
 ```
 
-### **Successful Response**
-```json
-{
-  "cookies": [
-    {
-      "name": "cf_clearance",
-      "value": "abc123...",
-      "domain": ".example.com",
-      "path": "/",
-      "expires": 1676142392.307484,
-      "httpOnly": true,
-      "secure": true
-    },
-    // more cookies
-  ],
-  "headers": {
-    "user-agent": "Mozilla/5.0...",
-    // more headers
-  }
-}
+This will launch:
+- **Unflare Service** on `http://localhost:5002`
+- **Bypass Proxy Service** on `http://localhost:5003`
+
+## Usage
+
+### 1. Simple Proxy Request
+
+To proxy a URL and bypass Cloudflare:
+
+```bash
+curl "http://localhost:5003/?url=https://example.com/some-page"
 ```
 
-Returns valid session cookies (e.g. `cf_clearance`) and browser headers.
+The proxy will:
+1. Contact the Unflare service to get valid clearance data for `example.com`.
+2. Make a request to the target URL with those cookies and headers.
+3. Return the response, rewriting any internal links to also use the proxy.
 
-### **Error Response**
-```json
-{
-  "code": "error",
-  "message": "..."
-}
-```
+### 2. Scraping Clearance Data Directly (Unflare Service)
 
-### **Usage Examples**
-
-#### **Curl (GET)**
+If you only need the cookies and headers to use in your own application:
 
 ```bash
 curl -X POST http://localhost:5002/scrape \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "timeout": 60000}'
+  -d '{"url": "https://example.com/", "timeout": 60000}'
 ```
 
-#### **JavaScript (Fetch)**
-
-```javascript
-const res = await fetch('http://localhost:5002/scrape', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    url: 'https://example.com',
-    timeout: 60000,
-    proxy: {
-      host: "proxy.example.com",
-      port: 8080,
-      username: "user",
-      password: "pass"
-    }
-  })
-});
-
-const { cookies, headers } = await res.json();
-// Use cookies/headers for next requests
+Response format:
+```json
+{
+  "cookies": [ ... ],
+  "headers": { ... }
+}
 ```
 
-### **Deployment (Docker)**
-- **Build & Run:**
+### 3. XML Feed Filtering
+
+You can filter XML/RSS items by category by passing the `ignore` parameter (comma-separated list of categories to exclude):
+
 ```bash
-docker build -t unflare .
-docker run -p 5002:5002 unflare
+curl "http://localhost:5003/?url=https://example.com/feed/&ignore=category1,category2"
 ```
 
-- **Or if you prefer Docker Compose:**
-``` yaml
-services:
-  unflare:
-    image: ghcr.io/iamyegor/unflare
-    ports:
-      - "5002:5002"
-```
+## Configuration
+
+### Environment Variables (for `bypass-cloudflare-proxy` service)
+
+- `UNFLARE_URL`: The URL of the Unflare service (default: `http://unflare:5002`).
+- `ADDON_PORT`: The port the proxy service listens on (default: `5003`).
+
+## Project Structure
+
+- `Dockerfile`: Build instructions for the heavy Unflare service (includes Chromium).
+- `Dockerfile.addon`: Build instructions for the lightweight Proxy service.
+- `script.js`: The main logic for the Proxy service (URL rewriting, caching, and proxying).
+- `src/`: Source code for the TypeScript-based Unflare service.
+- `docker-compose.yaml`: Orchestrates both services.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
