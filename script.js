@@ -178,10 +178,44 @@ async function performProxiedRequest(targetUrl, clearanceData) {
     });
 }
 
+/**
+ * Filters XML by category
+ *
+ * @param xml
+ * @param ignoreList
+ * @returns {string}
+ */
+function filterXmlByCategory(xml, ignoreList) {
+    if (!ignoreList.length) return xml;
+
+    const normalizedIgnore = ignoreList.map(v => v.toLowerCase());
+    console.log(`XML detected. Filtering XML by categories: ${ignoreList.join(', ')}`);
+
+    return xml.replace(/<item\b[^>]*>[\s\S]*?<\/item>/gi, (itemBlock) => {
+        const categories = [...itemBlock.matchAll(/<category[^>]*>([\s\S]*?)<\/category>/gi)]
+            .map(match => {
+                let value = match[1].trim();
+
+                // Strip CDATA if present
+                const cdataMatch = value.match(/^<!\[CDATA\[(.*)\]\]>$/i);
+                if (cdataMatch) {
+                    value = cdataMatch[1];
+                }
+
+                return value.trim().toLowerCase();
+            });
+
+        const shouldRemove = categories.some(cat => normalizedIgnore.includes(cat));
+
+        return shouldRemove ? '' : itemBlock;
+    });
+}
+
 app.use(cors());
 
 /**
- * Handles GET requests to the root route. Pass a url parameter that needs to be proxied.
+ * Handles GET requests to the root route. Pass a 'url' parameter that needs to be proxied.
+ * For XML requests, you can pass an 'ignore' parameter with a comma-separated list of categories to ignore.
  */
 app.get('/', async (req, res) => {
     const targetUrl = req.query.url;
@@ -189,6 +223,12 @@ app.get('/', async (req, res) => {
     if (!targetUrl) {
         return res.status(400).json({ error: 'Missing "url" query parameter.' });
     }
+
+    const ignoreParam = req.query.ignore || '';
+    const ignoreList = ignoreParam
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
 
     let domain;
     try {
@@ -236,6 +276,14 @@ app.get('/', async (req, res) => {
         } else if (contentType.includes('text/css')) {
             const css = rewriteCss(targetResponse.data.toString(), targetUrl, domain, proxyBase);
             res.status(targetResponse.status).send(css);
+        } else if (contentType.includes('xml') || contentType.includes('application/rss+xml') || contentType.includes('application/xml')) {
+            let xml = targetResponse.data.toString();
+
+            if (ignoreList.length > 0) {
+                xml = filterXmlByCategory(xml, ignoreList);
+            }
+
+            res.status(targetResponse.status).send(xml);
         } else {
             res.status(targetResponse.status).send(targetResponse.data);
         }
