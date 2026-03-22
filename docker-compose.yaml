@@ -1,5 +1,21 @@
 services:
-  unflare:
-    image: ghcr.io/iamyegor/unflare
+  bypass-cloudflare-proxy:
+    build: .
+    image: bypass-cloudflare-proxy
+    container_name: bypass-cloudflare-proxy
     ports:
       - "5002:5002"
+
+  unflare-addon:
+    image: bypass-cloudflare-proxy
+    container_name: unflare-addon
+    command: node script.js
+    ports:
+      - "5003:5003"
+    environment:
+      - UNFLARE_URL=http://bypass-cloudflare-proxy:5002
+      - ADDON_PORT=5003
+    depends_on:
+      - bypass-cloudflare-proxy
+    volumes:
+      - ./script.js:/usr/src/app/script.js
