@@ -160,6 +160,44 @@ function rewriteCss(css, targetUrl, domain, proxyBase) {
 }
 
 /**
+ * Rewrites URLs within an XML string (e.g., RSS feed <link> tags).
+ * @param {string} xml The raw XML content.
+ * @param {string} targetUrl The current page's URL.
+ * @param {string} domain The current page's domain.
+ * @param {string} proxyBase The base URL of this proxy server.
+ * @returns {string} The rewritten XML.
+ */
+function rewriteXml(xml, targetUrl, domain, proxyBase) {
+    // Rewrite <link>...</link> tags content if they contain URLs
+    let rewritten = xml.replace(/<link>([^<]+)<\/link>/gi, (match, url) => {
+        const trimmedUrl = url.trim();
+        if (!trimmedUrl || !trimmedUrl.startsWith('http')) {
+            return match;
+        }
+        return `<link>${rewriteUrl(trimmedUrl, targetUrl, domain, proxyBase)}</link>`;
+    });
+
+    // Also handle other common URL patterns in RSS/XML
+    // <url>...</url>
+    rewritten = rewritten.replace(/<url>([^<]+)<\/url>/gi, (match, url) => {
+        const trimmedUrl = url.trim();
+        if (!trimmedUrl || !trimmedUrl.startsWith('http')) {
+            return match;
+        }
+        return `<url>${rewriteUrl(trimmedUrl, targetUrl, domain, proxyBase)}</url>`;
+    });
+
+    // <enclosure url="..." ... />
+    rewritten = rewritten.replace(/(<enclosure\b[^>]*\burl=["'])([^"']+)(["'][^>]*>)/gi, (match, start, url, end) => {
+        return `${start}${rewriteUrl(url, targetUrl, domain, proxyBase)}${end}`;
+    });
+
+    // <image><url>...</url></image> handled by the <url> regex above
+
+    return rewritten;
+}
+
+/**
  * Performs a proxied GET request to the target URL using the given clearance data.
  * @param {string} targetUrl The URL to request.
  * @param {Object} clearanceData The cookies and headers from Unflare.
@@ -294,6 +332,9 @@ app.get('/', async (req, res) => {
             if (ignoreList.length > 0) {
                 xml = filterXmlByCategory(xml, ignoreList);
             }
+
+            // Always rewrite URLs in XML as well
+            xml = rewriteXml(xml, targetUrl, domain, proxyBase);
 
             res.status(targetResponse.status).send(xml);
         } else {
