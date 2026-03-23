@@ -43,6 +43,9 @@ screenshots/
 .cache/
 .parcel-cache/
 
+# Environment files
+.env
+
 # Temporary files
 tmp/
 temp/

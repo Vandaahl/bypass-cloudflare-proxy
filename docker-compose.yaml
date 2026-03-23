@@ -15,8 +15,9 @@ services:
     ports:
       - "5003:5003"
     environment:
-      - UNFLARE_URL=http://unflare:5002
-      - ADDON_PORT=5003
+      - UNFLARE_URL=${UNFLARE_URL:-http://unflare:5002}
+      - ADDON_PORT=${ADDON_PORT:-5003}
+      - DOMAIN_WHITELIST=${DOMAIN_WHITELIST:-} # Optional: Comma-separated list of allowed domains (e.g., example.com,test.com)
     depends_on:
       - unflare
     volumes:

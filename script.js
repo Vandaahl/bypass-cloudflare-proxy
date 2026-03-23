@@ -6,6 +6,9 @@ const app = express();
 // Configuration
 const UNFLARE_URL = process.env.UNFLARE_URL || 'http://localhost:5002';
 const PORT = process.env.ADDON_PORT || 5003;
+const DOMAIN_WHITELIST = process.env.DOMAIN_WHITELIST 
+    ? process.env.DOMAIN_WHITELIST.split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
+    : [];
 
 // In-memory cache for clearance cookies and headers
 // Key: domain (e.g., 'example.com')
@@ -232,9 +235,18 @@ app.get('/', async (req, res) => {
 
     let domain;
     try {
-        domain = new URL(targetUrl).hostname;
+        domain = new URL(targetUrl).hostname.toLowerCase();
     } catch (e) {
         return res.status(400).json({ error: 'Invalid URL provided.' });
+    }
+
+    // Domain whitelist check
+    if (DOMAIN_WHITELIST.length > 0 && !DOMAIN_WHITELIST.includes(domain)) {
+        console.warn(`Blocked request to non-whitelisted domain: ${domain}`);
+        return res.status(403).json({ 
+            error: 'Forbidden', 
+            details: `The domain "${domain}" is not on the allowed whitelist.` 
+        });
     }
 
     console.log(`Processing request for: ${targetUrl} (domain: ${domain})`);

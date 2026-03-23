@@ -2,7 +2,7 @@
 
 **AI was used to help create this project**
 
-A dual-service Node.js solution to bypass Cloudflare protection and proxy requests seamlessly. This project consists of two main components:
+A dual-service Node.js solution in a Docker container to bypass Cloudflare protection and proxy requests seamlessly. This project consists of two main components:
 1. **Unflare Service**: A headless browser-based API that solves Cloudflare challenges and returns clearance cookies and headers.
 2. **Addon Proxy (bypass-cloudflare-proxy)**: A lightweight Node.js server that uses the Unflare service to proxy GET requests, providing a seamless browsing experience even behind Cloudflare.
 
@@ -20,7 +20,7 @@ A dual-service Node.js solution to bypass Cloudflare protection and proxy reques
 
 ## Getting Started
 
-To start the services, simply run:
+To start the services, create a `.env` file (see [Configuration](#configuration) section) and run:
 
 ```bash
 docker-compose up -d
@@ -71,12 +71,22 @@ You can filter XML/RSS items by category by passing the `ignore` parameter (comm
 curl "http://localhost:5003/?url=https://example.com/feed/&ignore=category1,category2"
 ```
 
-## Configuration
+### Configuration
 
-### Environment Variables (for `bypass-cloudflare-proxy` service)
+The proxy configuration is managed via a `.env` file in the project root. You can create one with the following default values:
+
+```env
+# Proxy Configuration
+UNFLARE_URL=http://unflare:5002
+ADDON_PORT=5003
+DOMAIN_WHITELIST=
+```
+
+#### Environment Variables (for `bypass-cloudflare-proxy` service)
 
 - `UNFLARE_URL`: The URL of the Unflare service (default: `http://unflare:5002`).
 - `ADDON_PORT`: The port the proxy service listens on (default: `5003`).
+- `DOMAIN_WHITELIST`: Optional comma-separated list of domains that are allowed to be proxied. If empty, all domains are allowed (e.g., `example.com,test.com`).
 
 ## Project Structure
 
