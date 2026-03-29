@@ -5,7 +5,7 @@ const app = express();
 
 // Configuration
 const UNFLARE_URL = process.env.UNFLARE_URL || 'http://localhost:5002';
-const PORT = process.env.ADDON_PORT || 5003;
+const PORT = parseInt(process.env.ADDON_PORT) || 5003;
 const DOMAIN_WHITELIST = process.env.DOMAIN_WHITELIST 
     ? process.env.DOMAIN_WHITELIST.split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
     : [];
