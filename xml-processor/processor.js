@@ -28,7 +28,9 @@ function httpGet(url) {
             }
 
             let data = '';
-            res.on('data', (chunk) => { data += chunk; });
+            res.on('data', (chunk) => {
+                data += chunk;
+            });
             res.on('end', () => {
                 resolve({
                     status: res.statusCode,
@@ -47,18 +49,18 @@ function httpGet(url) {
  */
 function isXml(contentType, data) {
     const isXmlContentType = contentType && (
-        contentType.includes('xml') || 
-        contentType.includes('rss') || 
+        contentType.includes('xml') ||
+        contentType.includes('rss') ||
         contentType.includes('atom')
     );
-    
+
     // Check if the content starts with an XML declaration or a common tag like <rss or <feed
     const content = (data || '').trim().toLowerCase();
-    const hasXmlSignature = content.startsWith('<?xml') || 
-                             content.startsWith('<rss') || 
-                             content.startsWith('<feed') ||
-                             content.startsWith('<urlset');
-    
+    const hasXmlSignature = content.startsWith('<?xml') ||
+        content.startsWith('<rss') ||
+        content.startsWith('<feed') ||
+        content.startsWith('<urlset');
+
     return isXmlContentType || hasXmlSignature;
 }
 
@@ -82,7 +84,7 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
     if (!url || url.startsWith('data:') || url.startsWith('javascript:') || url.startsWith('#')) {
         return url;
     }
-    
+
     let absoluteUrl;
     try {
         absoluteUrl = new URL(url, targetUrl).href;
@@ -98,7 +100,7 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
     } catch (e) {
         return absoluteUrl;
     }
-    
+
     return `${proxyBase}${encodeURIComponent(absoluteUrl)}`;
 }
 
@@ -167,34 +169,34 @@ app.get('/', async (req, res) => {
     let targetUrl = req.query.url;
     const ignoreParam = req.query.ignore || '';
     const directFetch = req.query.direct === 'true';
-    
+
     if (!targetUrl) {
         return sendXmlError(res, 400, 'Bad Request', 'Missing "url" query parameter.');
     }
 
     try {
         // 1. Fetch the XML (either directly or from the bypass-cloudflare-proxy)
-        const fetchUrl = directFetch 
-            ? targetUrl 
+        const fetchUrl = directFetch
+            ? targetUrl
             : `${PROXY_URL}/?url=${encodeURIComponent(targetUrl)}`;
-        
+
         console.log(`Fetching XML from: ${fetchUrl} (direct: ${directFetch})`);
         const proxyResponse = await httpGet(fetchUrl);
 
         const contentType = proxyResponse.headers['content-type'] || '';
         let xml = proxyResponse.data;
 
-    // If the response is actually a 403 or 503, it's likely Cloudflare or some protection
-    if (proxyResponse.status >= 400) {
-        const errorMsg = proxyResponse.status === 403 || proxyResponse.status === 503 
-            ? 'Access Denied (Cloudflare?)' 
-            : 'Upstream Error';
-        console.warn(`Upstream returned ${proxyResponse.status} for ${targetUrl}.`);
-        return sendXmlError(res, proxyResponse.status, errorMsg, `The requested URL returned status ${proxyResponse.status}. ${directFetch ? 'Try removing "direct=true".' : ''}`);
-    }
+        // If the response is actually a 403 or 503, it's likely Cloudflare or some protection
+        if (proxyResponse.status >= 400) {
+            const errorMsg = proxyResponse.status === 403 || proxyResponse.status === 503
+                ? 'Access Denied (Cloudflare?)'
+                : 'Upstream Error';
+            console.warn(`Upstream returned ${proxyResponse.status} for ${targetUrl}.`);
+            return sendXmlError(res, proxyResponse.status, errorMsg, `The requested URL returned status ${proxyResponse.status}. ${directFetch ? 'Try removing "direct=true".' : ''}`);
+        }
 
-    // Check if the response is actually XML
-    if (!isXml(contentType, xml)) {
+        // Check if the response is actually XML
+        if (!isXml(contentType, xml)) {
             console.warn(`Rejected non-XML response for ${targetUrl} (Content-Type: ${contentType})`);
             return sendXmlError(res, 415, 'Unsupported Media Type', `The requested URL did not return XML content (Content-Type: ${contentType}).`);
         }
