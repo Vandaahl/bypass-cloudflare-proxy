@@ -1,0 +1,13 @@
+{
+  "name": "xml-processor",
+  "version": "1.0.0",
+  "description": "A service for processing and modifying XML requests.",
+  "main": "processor.js",
+  "scripts": {
+    "start": "node processor.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}
