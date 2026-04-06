@@ -32,4 +32,6 @@ services:
       - "5004:5004"
     environment:
       - PORT=5004
+      - ADDON_PORT=${ADDON_PORT:-5003}
       - PROXY_URL=http://bypass-cloudflare-proxy:5003
+      - PUBLIC_PROXY_URL=${PUBLIC_PROXY_URL:-}

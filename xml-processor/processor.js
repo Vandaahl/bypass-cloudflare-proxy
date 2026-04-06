@@ -5,7 +5,11 @@ const https = require('https');
 const app = express();
 
 const PORT = parseInt(process.env.PORT) || 5004;
+const ADDON_PORT = parseInt(process.env.ADDON_PORT) || 5003;
 const PROXY_URL = process.env.PROXY_URL || 'http://bypass-cloudflare-proxy:5003';
+// PUBLIC_PROXY_URL: Optional public URL of the Addon Proxy (e.g., https://proxy.example.com)
+// If not set, it will be derived from the Host header.
+const PUBLIC_PROXY_URL = process.env.PUBLIC_PROXY_URL || '';
 
 /**
  * Helper to perform a GET request using Node's http or https module.
@@ -105,6 +109,149 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
 }
 
 /**
+ * Extracts image URL from HTML content based on a selector.
+ * Since we don't have an HTML parser, we use a basic regex approach for ID/class selectors.
+ */
+function extractImageUrl(html, selector) {
+    if (!html || !selector) return null;
+
+    let searchPattern;
+    if (selector.startsWith('#')) {
+        // Find img element by id
+        const id = selector.substring(1);
+        searchPattern = new RegExp(`<img[^>]+id=["']${id}["'][^>]*src=["']([^"']+)["']`, 'i');
+    } else if (selector.startsWith('.')) {
+        // Find img element by class
+        const className = selector.substring(1);
+        searchPattern = new RegExp(`<img[^>]+class=["'][^"']*${className}[^"']*["'][^>]*src=["']([^"']+)["']`, 'i');
+    } else {
+        // Treat as tag name (e.g., 'img')
+        searchPattern = new RegExp(`<${selector}[^>]*src=["']([^"']+)["']`, 'i');
+    }
+
+    const match = html.match(searchPattern);
+    if (match) return match[1];
+
+    // Try a more flexible search for img tags that contain the ID/class anywhere
+    if (selector.startsWith('#')) {
+        const id = selector.substring(1);
+        const flexMatch = html.match(new RegExp(`<img[^>]+id=["']${id}["']`, 'i'));
+        if (flexMatch) {
+            const imgTag = flexMatch[0];
+            const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
+            if (srcMatch) return srcMatch[1];
+        }
+    } else if (selector.startsWith('.')) {
+        const className = selector.substring(1);
+        const flexMatch = html.match(new RegExp(`<img[^>]+class=["'][^"']*${className}[^"']*["']`, 'i'));
+        if (flexMatch) {
+            const imgTag = flexMatch[0];
+            const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
+            if (srcMatch) return srcMatch[1];
+        }
+    }
+
+    // If no img match found, try to find a parent element matching the selector
+    // and then find the first img inside it.
+    let parentContent = null;
+    if (selector.startsWith('#')) {
+        const id = selector.substring(1);
+        // Find any tag with this id and capture its content
+        // This is tricky with regex due to nested tags, but we'll try to find the opening tag and some following content
+        const parentMatch = html.match(new RegExp(`<([a-z0-9]+)[^>]+id=["']${id}["'][^>]*>([\\s\\S]*?)</\\1>`, 'i'));
+        if (parentMatch) {
+            parentContent = parentMatch[2];
+        }
+    } else if (selector.startsWith('.')) {
+        const className = selector.substring(1);
+        // Find any tag with this class and capture its content
+        const parentMatch = html.match(new RegExp(`<([a-z0-9]+)[^>]+class=["'][^"']*${className}[^"']*["'][^>]*>([\\s\\S]*?)</\\1>`, 'i'));
+        if (parentMatch) {
+            parentContent = parentMatch[2];
+        }
+    }
+
+    if (parentContent) {
+        const innerImgMatch = parentContent.match(/<img[^>]+src=["']([^"']+)["']/i);
+        if (innerImgMatch) return innerImgMatch[1];
+    }
+
+    return null;
+}
+
+/**
+ * Scrapes an image from a link and adds it to the item block.
+ */
+async function addImageToItem(itemBlock, selector, targetUrl, domain, proxyBase, directFetch) {
+    // Check if it already has an image (enclosure or media:content or img tag)
+    if (/<enclosure\b[^>]*\btype=["']image\/[^"']+["'][^>]*>/i.test(itemBlock) ||
+        /<media:content\b[^>]*\bmedium=["']image["'][^>]*>/i.test(itemBlock) ||
+        /<img\b[^>]*>/i.test(itemBlock)) {
+        return itemBlock;
+    }
+
+    // Find the link
+    const linkMatch = itemBlock.match(/<link>([^<]+)<\/link>/i);
+    if (!linkMatch) return itemBlock;
+
+    let itemLink = linkMatch[1].trim();
+    
+    // If it's already proxied, extract the original URL
+    if (itemLink.startsWith(proxyBase)) {
+        try {
+            itemLink = decodeURIComponent(itemLink.substring(proxyBase.length));
+        } catch (e) {
+            console.warn(`Failed to decode proxied URL: ${itemLink}`);
+        }
+    }
+    
+    if (!itemLink.startsWith('http')) return itemBlock;
+
+    try {
+        // Fetch the linked page (using proxy if not direct)
+        const fetchUrl = directFetch
+            ? itemLink
+            : `${PROXY_URL}/?url=${encodeURIComponent(itemLink)}`;
+
+        console.log(`Scraping image for item: ${itemLink} using selector: ${selector}`);
+        const response = await httpGet(fetchUrl);
+        if (response.status !== 200) return itemBlock;
+
+        let imageUrl = extractImageUrl(response.data, selector);
+        if (imageUrl) {
+            // Fix for bug 1: If the image URL is already proxied by the internal proxy, un-proxy it first
+            // to avoid internal Docker hostnames leaking into the XML.
+            const internalProxyBase = `${PROXY_URL}/?url=`;
+            if (imageUrl.startsWith(internalProxyBase)) {
+                try {
+                    imageUrl = decodeURIComponent(imageUrl.substring(internalProxyBase.length));
+                } catch (e) {
+                    console.warn(`Failed to decode internal proxied image URL: ${imageUrl}`);
+                }
+            } else if (imageUrl.startsWith(proxyBase)) {
+                try {
+                    imageUrl = decodeURIComponent(imageUrl.substring(proxyBase.length));
+                } catch (e) {
+                    console.warn(`Failed to decode proxied image URL: ${imageUrl}`);
+                }
+            }
+
+            const absoluteImageUrl = new URL(imageUrl, itemLink).href;
+            const proxiedImageUrl = rewriteUrl(absoluteImageUrl, targetUrl, domain, proxyBase);
+            
+            // Add as enclosure
+            const enclosure = `\n        <enclosure url="${proxiedImageUrl}" length="0" type="image/jpeg" />`;
+            // Insert enclosure before </item>
+            return itemBlock.replace(/<\/item>/i, `${enclosure}\n    </item>`);
+        }
+    } catch (e) {
+        console.warn(`Failed to scrape image for ${itemLink}: ${e.message}`);
+    }
+
+    return itemBlock;
+}
+
+/**
  * Rewrites URLs within an XML string (e.g., RSS feed <link> tags).
  */
 function rewriteXml(xml, targetUrl, domain, proxyBase) {
@@ -168,6 +315,7 @@ app.use(cors());
 app.get('/', async (req, res) => {
     let targetUrl = req.query.url;
     const ignoreParam = req.query.ignore || '';
+    const imgSelector = req.query.img_selector || '';
     const directFetch = req.query.direct === 'true';
 
     if (!targetUrl) {
@@ -210,7 +358,17 @@ app.get('/', async (req, res) => {
 
         const protocol = req.headers['x-forwarded-proto'] || req.protocol;
         const host = req.headers['x-forwarded-host'] || req.get('host');
-        const proxyBase = `${protocol}://${host}/?url=`;
+        
+        let proxyBase;
+        if (PUBLIC_PROXY_URL) {
+            // Use the explicitly provided public proxy URL
+            proxyBase = PUBLIC_PROXY_URL.endsWith('/') ? `${PUBLIC_PROXY_URL}?url=` : `${PUBLIC_PROXY_URL}/?url=`;
+        } else {
+            // Fallback to deriving it from the current Host header
+            // Fix for bug 2: Use ADDON_PORT instead of the current PORT for rewritten links
+            const proxyHost = host.replace(`:${PORT}`, `:${ADDON_PORT}`);
+            proxyBase = `${protocol}://${proxyHost}/?url=`;
+        }
 
         // 2. Process the XML
         let processedXml = xml;
@@ -221,6 +379,39 @@ app.get('/', async (req, res) => {
         }
 
         processedXml = rewriteXml(processedXml, targetUrl, domain, proxyBase);
+        
+        // 2.5. Scrape images for items if imgSelector is provided
+        if (imgSelector) {
+            const regex = /<item\b[^>]*>[\s\S]*?<\/item>/gi;
+            const itemMatches = [...processedXml.matchAll(regex)];
+            
+            if (itemMatches.length > 0) {
+                // Collect all new item contents
+                const newItemContents = [];
+                const BATCH_SIZE = 5;
+                for (let i = 0; i < itemMatches.length; i += BATCH_SIZE) {
+                    const batch = itemMatches.slice(i, i + BATCH_SIZE);
+                    const results = await Promise.all(batch.map(m => 
+                        addImageToItem(m[0], imgSelector, targetUrl, domain, proxyBase, directFetch)
+                    ));
+                    newItemContents.push(...results);
+                }
+                
+                // Rebuild XML using matches' positions
+                let resultXml = '';
+                let offset = 0;
+                for (let i = 0; i < itemMatches.length; i++) {
+                    const match = itemMatches[i];
+                    const start = match.index;
+                    const end = start + match[0].length;
+                    
+                    resultXml += processedXml.substring(offset, start) + newItemContents[i];
+                    offset = end;
+                }
+                resultXml += processedXml.substring(offset);
+                processedXml = resultXml;
+            }
+        }
 
         // 3. Return the processed XML
         res.set('Content-Type', 'application/xml');
