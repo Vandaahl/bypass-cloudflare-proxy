@@ -1,12 +1,13 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const cheerio = require('cheerio');
 const app = express();
 
 // Configuration
 const UNFLARE_URL = process.env.UNFLARE_URL || 'http://localhost:5002';
 const PORT = parseInt(process.env.ADDON_PORT) || 5003;
-const DOMAIN_WHITELIST = process.env.DOMAIN_WHITELIST 
+const DOMAIN_WHITELIST = process.env.DOMAIN_WHITELIST
     ? process.env.DOMAIN_WHITELIST.split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
     : [];
 
@@ -33,16 +34,15 @@ async function getClearanceData(targetUrl, domain, forceRefresh = false) {
     }
 
     console.log(`${forceRefresh ? 'Forcing refresh of' : 'Scraping new'} clearance for: ${targetUrl}`);
-    
-    // Making an internal request to Unflare's /scrape endpoint
+
     const unflareResponse = await axios.post(`${UNFLARE_URL}/scrape`, {
         url: targetUrl,
         timeout: 60000
     }, {
-        headers: { 'Content-Type': 'application/json' }
+        headers: {'Content-Type': 'application/json'}
     });
 
-    const { cookies, headers: unflareHeaders } = unflareResponse.data;
+    const {cookies, headers: unflareHeaders} = unflareResponse.data;
 
     if (!cookies || !unflareHeaders) {
         throw new Error('Failed to obtain cookies or headers from Unflare.');
@@ -75,7 +75,7 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
     if (!url || url.startsWith('data:') || url.startsWith('javascript:') || url.startsWith('#')) {
         return url;
     }
-    
+
     let absoluteUrl;
     try {
         absoluteUrl = new URL(url, targetUrl).href;
@@ -93,8 +93,31 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
     } catch (e) {
         return absoluteUrl;
     }
-    
+
     return `${proxyBase}${encodeURIComponent(absoluteUrl)}`;
+}
+
+/**
+ * Removes elements with specified classes from an HTML string.
+ * @param {string} html The raw HTML content.
+ * @param {string[]} classes The list of class names to remove.
+ * @returns {string} The modified HTML.
+ */
+function removeClassesFromHtml(html, classes) {
+    if (!classes || classes.length === 0) {
+        return html;
+    }
+
+    try {
+        const $ = cheerio.load(html);
+        classes.forEach(className => {
+            $(`.${className}`).remove();
+        });
+        return $.html();
+    } catch (e) {
+        console.warn('Error removing classes from HTML:', e.message);
+        return html;
+    }
 }
 
 /**
@@ -108,10 +131,10 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
 function rewriteHtml(html, targetUrl, domain, proxyBase) {
     return html.replace(/\b(src|href|srcset|style|data-[a-z0-9-]+)=["']([^"']+)["']/gi, (match, attr, value) => {
         const lowerAttr = attr.toLowerCase();
-        
+
         // Only rewrite if it's a known URL attribute or starts with data- and looks like it might be a URL
         const isKnownUrlAttr = ['src', 'href', 'srcset', 'style'].includes(lowerAttr);
-        const isDataUrlAttr = lowerAttr.startsWith('data-') && 
+        const isDataUrlAttr = lowerAttr.startsWith('data-') &&
             (value.trim().startsWith('http') || value.trim().startsWith('/') || value.trim().includes('.jpg') || value.trim().includes('.png') || value.trim().includes('.ttf') || value.trim().includes('.tff') || value.trim().includes('.woff') || value.trim().includes('.woff2'));
 
         if (!isKnownUrlAttr && !isDataUrlAttr) {
@@ -123,11 +146,11 @@ function rewriteHtml(html, targetUrl, domain, proxyBase) {
             const parts = value.split(',').map(part => {
                 const trimmed = part.trim();
                 if (!trimmed) return part;
-                
+
                 const splitPart = trimmed.split(/\s+/);
                 const url = splitPart[0];
                 const descriptor = splitPart.slice(1).join(' ');
-                
+
                 if (!url) return part;
                 return `${rewriteUrl(url, targetUrl, domain, proxyBase)}${descriptor ? ' ' + descriptor : ''}`;
             });
@@ -140,7 +163,7 @@ function rewriteHtml(html, targetUrl, domain, proxyBase) {
                 return `url('${rewriteUrl(u, targetUrl, domain, proxyBase)}')`;
             })}"`;
         }
-        
+
         return `${attr}="${rewriteUrl(value, targetUrl, domain, proxyBase)}"`;
     });
 }
@@ -166,7 +189,7 @@ function rewriteCss(css, targetUrl, domain, proxyBase) {
  * @returns {Promise<import('axios').AxiosResponse>}
  */
 async function performProxiedRequest(targetUrl, clearanceData) {
-    const { cookies, headers: unflareHeaders } = clearanceData;
+    const {cookies, headers: unflareHeaders} = clearanceData;
     const cookieString = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
 
     return axios.get(targetUrl, {
@@ -189,9 +212,9 @@ app.use(cors());
  */
 app.get('/', async (req, res) => {
     const targetUrl = req.query.url;
-    
+
     if (!targetUrl) {
-        return res.status(400).json({ error: 'Missing "url" query parameter.' });
+        return res.status(400).json({error: 'Missing "url" query parameter.'});
     }
 
     const ignoreParam = req.query.ignore || '';
@@ -200,29 +223,35 @@ app.get('/', async (req, res) => {
         .map(s => s.trim())
         .filter(Boolean);
 
+    const removeClassesParam = req.query.remove_classes || '';
+    const removeClassesList = removeClassesParam
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+
     let domain;
     try {
         domain = new URL(targetUrl).hostname.toLowerCase();
     } catch (e) {
-        return res.status(400).json({ error: 'Invalid URL provided.' });
+        return res.status(400).json({error: 'Invalid URL provided.'});
     }
 
     // Domain whitelist check
     if (DOMAIN_WHITELIST.length > 0 && !DOMAIN_WHITELIST.includes(domain)) {
         console.warn(`Blocked request to non-whitelisted domain: ${domain}`);
-        return res.status(403).json({ 
-            error: 'Forbidden', 
-            details: `The domain "${domain}" is not on the allowed whitelist.` 
+        return res.status(403).json({
+            error: 'Forbidden',
+            details: `The domain "${domain}" is not on the allowed whitelist.`
         });
     }
 
     console.log(`Processing request for: ${targetUrl} (domain: ${domain})`);
 
     try {
-        // 1. Get clearance data
+        // Get clearance data
         let clearanceData = await getClearanceData(targetUrl, domain);
 
-        // 2. Make the request to the target URL
+        // Make the request to the target URL
         let targetResponse = await performProxiedRequest(targetUrl, clearanceData);
 
         // If we get a 403, it might mean our cached clearance is no longer valid
@@ -232,7 +261,7 @@ app.get('/', async (req, res) => {
             targetResponse = await performProxiedRequest(targetUrl, clearanceData);
         }
 
-        // 3. Forward the response back to the client
+        // Forward the response back to the client
         const headersToForward = ['content-type', 'cache-control', 'last-modified', 'etag'];
         headersToForward.forEach(header => {
             if (targetResponse.headers[header]) {
@@ -250,7 +279,15 @@ app.get('/', async (req, res) => {
         const proxyBase = `${protocol}://${host}/?url=`;
 
         if (contentType.includes('text/html')) {
-            const html = rewriteHtml(targetResponse.data.toString(), targetUrl, domain, proxyBase);
+            let html = targetResponse.data.toString();
+
+            // Remove elements by class if requested
+            if (removeClassesList.length > 0) {
+                html = removeClassesFromHtml(html, removeClassesList);
+            }
+
+            // Rewrite URLs in HTML
+            html = rewriteHtml(html, targetUrl, domain, proxyBase);
             res.status(targetResponse.status).send(html);
         } else if (contentType.includes('text/css')) {
             const css = rewriteCss(targetResponse.data.toString(), targetUrl, domain, proxyBase);
