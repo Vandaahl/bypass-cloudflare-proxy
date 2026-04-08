@@ -132,14 +132,27 @@ async function getClearance(
         page.on("request", async (request) => request.continue());
         page.on("response", async (res) => {
             try {
+                const responseUrl = res.url();
+                const responseStatus = res.status();
+
+                // Flexible matching: ignore trailing slashes and 'www.'
+                const normalizeUrl = (u: string) => {
+                    try {
+                        const parsed = new URL(u);
+                        return parsed.hostname.replace(/^www\./, "") + parsed.pathname.replace(/\/$/, "");
+                    } catch (e) {
+                        return u;
+                    }
+                };
+
+                const normalizedTarget = normalizeUrl(data.url);
+                const normalizedResponse = normalizeUrl(responseUrl);
+                const cookies = await browser.cookies();
+
                 if (
-                    [200, 302].includes(res.status()) &&
-                    [data.url, data.url + "/"].includes(res.url())
+                    (normalizedResponse === normalizedTarget && [200, 302].includes(responseStatus)) ||
+                    (!isResolved && cookies.some(c => c.name === 'cf_clearance'))
                 ) {
-                    await page
-                        .waitForNavigation({ waitUntil: "load", timeout: 10000 })
-                        .catch(() => {});
-                    const cookies = await browser.cookies();
                     let headers = res.request().headers();
                     delete headers["content-type"];
                     delete headers["accept-encoding"];
@@ -149,7 +162,9 @@ async function getClearance(
                     clearInterval(cl);
                     resolve({ cookies, headers });
                 }
-            } catch (e) {}
+            } catch (e) {
+                logger.info(`Error in response handler: ${e instanceof Error ? e.message : String(e)}`);
+            }
         });
 
         const cl = setTimeout(async () => {
