@@ -98,74 +98,122 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
 }
 
 /**
- * Removes elements with specified classes from an HTML string.
- * @param {string} html The raw HTML content.
- * @param {string[]} classes The list of class names to remove.
+ * Processes HTML using Cheerio to perform two main tasks:
+ * 1. Remove elements based on user-defined class names.
+ * 2. Rewrite URLs (src, href, srcset, style, etc.) to point through this proxy.
+ *
+ * This function ensures that the proxied page remains functional and that its resources
+ * are also fetched through the Cloudflare bypass.
+ *
+ * @param {string} html The raw HTML content from the target site.
+ * @param {string[]} removeClasses Array of class names to remove from the DOM.
+ * @param {string} targetUrl The original URL of the page (for relative URL resolution).
+ * @param {string} domain The hostname of the target site (to restrict proxying to the same domain).
+ * @param {string} proxyBase The base URL of this proxy server (e.g., http://localhost:5003/?url=).
  * @returns {string} The modified HTML.
  */
-function removeClassesFromHtml(html, classes) {
-    if (!classes || classes.length === 0) {
-        return html;
-    }
-
+function processHtml(html, removeClasses, targetUrl, domain, proxyBase) {
     try {
+        // Load HTML into Cheerio for DOM manipulation
         const $ = cheerio.load(html);
-        classes.forEach(className => {
-            $(`.${className}`).remove();
+
+        // 1. Element Removal Logic
+        // Removes any elements that have classes specified in the 'remove_classes' query parameter.
+        if (removeClasses && removeClasses.length > 0) {
+            removeClasses.forEach(className => {
+                $(`.${className}`).remove();
+            });
+        }
+
+        // 2. URL Rewriting Logic
+        // List of standard attributes that typically contain URLs to resources.
+        const urlAttributes = ['src', 'href', 'srcset', 'imagesrcset', 'style', 'poster'];
+        
+        $('*').each((i, el) => {
+            const $el = $(el);
+
+            // Handle <base href="..."> tags specifically.
+            // If present, it changes how all relative URLs in the document are resolved.
+            if (el.name === 'base' && $el.attr('href')) {
+                const originalBase = $el.attr('href');
+                $el.attr('href', rewriteUrl(originalBase, targetUrl, domain, proxyBase));
+            }
+
+            /**
+             * Internal helper to process an attribute value based on its type.
+             * @param {string} name Attribute name (e.g., 'src', 'srcset', 'style').
+             * @param {string} value The current value of the attribute.
+             * @returns {string} The rewritten value.
+             */
+            const processAttrValue = (name, value) => {
+                // Check if the attribute is a 'srcset' variant (standard or data-attribute).
+                const isSrcset = name === 'srcset' || name === 'imagesrcset' || name.includes('srcset');
+                
+                if (isSrcset) {
+                    // srcset contains a comma-separated list of "URL Descriptor" pairs.
+                    // Example: "image-200.jpg 200w, image-400.jpg 400w"
+                    return value.split(',').map(part => {
+                        const trimmed = part.trim();
+                        if (!trimmed) return part;
+                        
+                        // Regex to separate the URL from its descriptor (like '200w' or '2x').
+                        // ^(\S+) matches the URL (non-whitespace characters).
+                        // \s*(.*)$ matches the optional descriptor following it.
+                        const match = trimmed.match(/^(\S+)\s*(.*)$/);
+                        if (!match) return part;
+                        
+                        const url = match[1];
+                        const descriptor = match[2];
+                        
+                        // Rewrite only the URL part and re-attach the descriptor.
+                        return `${rewriteUrl(url, targetUrl, domain, proxyBase)}${descriptor ? ' ' + descriptor : ''}`;
+                    }).join(', ');
+                } else if (name === 'style') {
+                    // Handle inline CSS in 'style' attributes.
+                    // We look for 'url(...)' declarations and rewrite the enclosed URLs.
+                    return value.replace(/url\(["']?([^"'\)]+)["']?\)/gi, (m, u) => {
+                        return `url('${rewriteUrl(u, targetUrl, domain, proxyBase)}')`;
+                    });
+                } else {
+                    // For standard URL attributes (src, href, poster, etc.), rewrite directly.
+                    return rewriteUrl(value, targetUrl, domain, proxyBase);
+                }
+            };
+
+            // Process the predefined list of URL attributes.
+            urlAttributes.forEach(attr => {
+                const value = $el.attr(attr);
+                if (value) {
+                    $el.attr(attr, processAttrValue(attr, value));
+                }
+            });
+
+            // 3. Data-Attribute Handling
+            // Many modern sites use 'data-src', 'data-lazy-src', etc., for lazy-loading.
+            // We iterate over all attributes and attempt to identify and rewrite URLs in 'data-' attributes.
+            for (const [attrName, value] of Object.entries(el.attribs)) {
+                if (attrName.startsWith('data-')) {
+                    const lowerValue = value.trim().toLowerCase();
+                    
+                    // Heuristic to detect if a data-attribute value looks like a URL or an image path.
+                    const looksLikeUrl = lowerValue.startsWith('http') ||
+                        lowerValue.startsWith('/') ||
+                        /\.(jpg|jpeg|png|gif|svg|webp|ttf|woff2?|otf|eot)(\?.*)?$/.test(lowerValue);
+
+                    if (looksLikeUrl) {
+                        $el.attr(attrName, processAttrValue(attrName, value));
+                    }
+                }
+            }
         });
+
+        // Return the modified HTML as a string.
         return $.html();
     } catch (e) {
-        console.warn('Error removing classes from HTML:', e.message);
+        // Fallback to original HTML if something goes wrong during parsing.
+        console.warn('Error processing HTML with Cheerio:', e.message);
         return html;
     }
-}
-
-/**
- * Rewrites URLs and resources within an HTML string.
- * @param {string} html The raw HTML content.
- * @param {string} targetUrl The current page's URL.
- * @param {string} domain The current page's domain.
- * @param {string} proxyBase The base URL of this proxy server.
- * @returns {string} The rewritten HTML.
- */
-function rewriteHtml(html, targetUrl, domain, proxyBase) {
-    return html.replace(/\b(src|href|srcset|style|data-[a-z0-9-]+)=["']([^"']+)["']/gi, (match, attr, value) => {
-        const lowerAttr = attr.toLowerCase();
-
-        // Only rewrite if it's a known URL attribute or starts with data- and looks like it might be a URL
-        const isKnownUrlAttr = ['src', 'href', 'srcset', 'style'].includes(lowerAttr);
-        const isDataUrlAttr = lowerAttr.startsWith('data-') &&
-            (value.trim().startsWith('http') || value.trim().startsWith('/') || value.trim().includes('.jpg') || value.trim().includes('.png') || value.trim().includes('.ttf') || value.trim().includes('.tff') || value.trim().includes('.woff') || value.trim().includes('.woff2'));
-
-        if (!isKnownUrlAttr && !isDataUrlAttr) {
-            return match;
-        }
-
-        if (lowerAttr === 'srcset' || lowerAttr === 'data-srcset') {
-            // srcset contains multiple URLs with descriptors, e.g. "url1 200w, url2 350w"
-            const parts = value.split(',').map(part => {
-                const trimmed = part.trim();
-                if (!trimmed) return part;
-
-                const splitPart = trimmed.split(/\s+/);
-                const url = splitPart[0];
-                const descriptor = splitPart.slice(1).join(' ');
-
-                if (!url) return part;
-                return `${rewriteUrl(url, targetUrl, domain, proxyBase)}${descriptor ? ' ' + descriptor : ''}`;
-            });
-            return `${attr}="${parts.join(', ')}"`;
-        }
-
-        if (lowerAttr === 'style') {
-            // style can contain url('...')
-            return `${attr}="${value.replace(/url\(["']?([^"'\)]+)["']?\)/gi, (m, u) => {
-                return `url('${rewriteUrl(u, targetUrl, domain, proxyBase)}')`;
-            })}"`;
-        }
-
-        return `${attr}="${rewriteUrl(value, targetUrl, domain, proxyBase)}"`;
-    });
 }
 
 /**
@@ -279,15 +327,7 @@ app.get('/', async (req, res) => {
         const proxyBase = `${protocol}://${host}/?url=`;
 
         if (contentType.includes('text/html')) {
-            let html = targetResponse.data.toString();
-
-            // Remove elements by class if requested
-            if (removeClassesList.length > 0) {
-                html = removeClassesFromHtml(html, removeClassesList);
-            }
-
-            // Rewrite URLs in HTML
-            html = rewriteHtml(html, targetUrl, domain, proxyBase);
+            const html = processHtml(targetResponse.data.toString(), removeClassesList, targetUrl, domain, proxyBase);
             res.status(targetResponse.status).send(html);
         } else if (contentType.includes('text/css')) {
             const css = rewriteCss(targetResponse.data.toString(), targetUrl, domain, proxyBase);
