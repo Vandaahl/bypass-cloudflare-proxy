@@ -256,7 +256,6 @@ app.use(cors());
 
 /**
  * Handles GET requests to the root route. Pass a 'url' parameter that needs to be proxied.
- * For XML requests, you can pass an 'ignore' parameter with a comma-separated list of categories to ignore.
  */
 app.get('/', async (req, res) => {
     const targetUrl = req.query.url;
@@ -264,12 +263,6 @@ app.get('/', async (req, res) => {
     if (!targetUrl) {
         return res.status(400).json({error: 'Missing "url" query parameter.'});
     }
-
-    const ignoreParam = req.query.ignore || '';
-    const ignoreList = ignoreParam
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
 
     const removeClassesParam = req.query.remove_classes || '';
     const removeClassesList = removeClassesParam
