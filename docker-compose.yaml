@@ -20,7 +20,6 @@ services:
       - DOMAIN_WHITELIST=${DOMAIN_WHITELIST:-} # Optional: Comma-separated list of allowed domains (e.g., example.com,test.com)
     depends_on:
       - unflare
-      - xml-processor
     volumes:
       - ./script.js:/usr/src/app/script.js
 
@@ -35,3 +34,7 @@ services:
       - ADDON_PORT=${ADDON_PORT:-5003}
       - PROXY_URL=http://bypass-cloudflare-proxy:5003
       - PUBLIC_PROXY_URL=${PUBLIC_PROXY_URL:-}
+    depends_on:
+      - bypass-cloudflare-proxy
+    volumes:
+      - ./xml-processor/processor.js:/usr/src/app/processor.js
