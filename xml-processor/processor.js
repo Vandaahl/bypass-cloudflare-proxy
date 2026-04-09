@@ -85,7 +85,7 @@ function sendXmlError(res, status, error, details) {
 /**
  * Rewrites a URL to go through the proxy if it belongs to the target domain.
  */
-function rewriteUrl(url, targetUrl, domain, proxyBase) {
+function rewriteUrl(url, targetUrl, domain, proxyBase, removeClasses = []) {
     if (!url || url.startsWith('data:') || url.startsWith('javascript:') || url.startsWith('#')) {
         return url;
     }
@@ -106,7 +106,11 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
         return absoluteUrl;
     }
 
-    return `${proxyBase}${encodeURIComponent(absoluteUrl)}`;
+    let proxiedUrl = `${proxyBase}${encodeURIComponent(absoluteUrl)}`;
+    if (removeClasses.length > 0) {
+        proxiedUrl += `&remove_classes=${encodeURIComponent(removeClasses.join(','))}`;
+    }
+    return proxiedUrl;
 }
 
 /**
@@ -139,7 +143,7 @@ function extractImageUrl(html, selector) {
  * Scrapes an image from a link and adds it to the item element.
  * item is a Cheerio element representing an <item> or <entry>.
  */
-async function addImageToCheerioItem(item, selector, targetUrl, domain, proxyBase, directFetch) {
+async function addImageToCheerioItem(item, selector, targetUrl, domain, proxyBase, directFetch, removeClasses = []) {
     // Check if it already has an image (enclosure or media:content or img tag)
     if (item.find('enclosure[type^="image/"]').length > 0 ||
         item.find('media\\:content[medium="image"]').length > 0 ||
@@ -173,7 +177,6 @@ async function addImageToCheerioItem(item, selector, targetUrl, domain, proxyBas
             ? itemLink
             : `${PROXY_URL}/?url=${encodeURIComponent(itemLink)}`;
 
-        console.log(`Scraping image for item: ${itemLink} using selector: ${selector}`);
         const response = await httpGet(fetchUrl);
         if (response.status !== 200) return;
 
@@ -202,7 +205,7 @@ async function addImageToCheerioItem(item, selector, targetUrl, domain, proxyBas
  * Process the XML using Cheerio: filter, rewrite URLs, and scrape images.
  */
 async function processXml(xml, targetUrl, domain, proxyBase, options = {}) {
-    const { ignoreList = [], imgSelector = '', directFetch = false } = options;
+    const { ignoreList = [], imgSelector = '', directFetch = false, removeClasses = [] } = options;
     
     // Load XML with xmlMode: true to preserve tags and casing
     const $ = cheerio.load(xml, { xmlMode: true });
@@ -224,6 +227,18 @@ async function processXml(xml, targetUrl, domain, proxyBase, options = {}) {
         });
     }
 
+    // 3. Scrape images if requested
+    if (imgSelector) {
+        const items = $('item, entry').toArray();
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < items.length; i += BATCH_SIZE) {
+            const batch = items.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(item => 
+                addImageToCheerioItem($(item), imgSelector, targetUrl, domain, proxyBase, directFetch, removeClasses)
+            ));
+        }
+    }
+
     // 2. Rewrite URLs
     $('link, url, enclosure').each((i, el) => {
         const $el = $(el);
@@ -232,33 +247,22 @@ async function processXml(xml, targetUrl, domain, proxyBase, options = {}) {
         if (tagName === 'enclosure') {
             const url = $el.attr('url');
             if (url) {
+                // Image enclosures do not need remove_classes parameter
                 $el.attr('url', rewriteUrl(url, targetUrl, domain, proxyBase));
             }
         } else {
             // For <link> and <url>
             let url = $el.text().trim();
             if (url.startsWith('http')) {
-                $el.text(rewriteUrl(url, targetUrl, domain, proxyBase));
+                $el.text(rewriteUrl(url, targetUrl, domain, proxyBase, removeClasses));
             }
             // Atom links: <link href="..." />
             const href = $el.attr('href');
             if (href && href.startsWith('http')) {
-                $el.attr('href', rewriteUrl(href, targetUrl, domain, proxyBase));
+                $el.attr('href', rewriteUrl(href, targetUrl, domain, proxyBase, removeClasses));
             }
         }
     });
-
-    // 3. Scrape images if requested
-    if (imgSelector) {
-        const items = $('item, entry').toArray();
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < items.length; i += BATCH_SIZE) {
-            const batch = items.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(item => 
-                addImageToCheerioItem($(item), imgSelector, targetUrl, domain, proxyBase, directFetch)
-            ));
-        }
-    }
 
     return $.xml();
 }
@@ -268,6 +272,7 @@ app.use(cors());
 app.get('/', async (req, res) => {
     let targetUrl = req.query.url;
     const ignoreParam = req.query.ignore || '';
+    const removeClassesParam = req.query.remove_classes || '';
     const imgSelector = req.query.img_selector || '';
     const directFetch = req.query.direct === 'true';
 
@@ -318,17 +323,18 @@ app.get('/', async (req, res) => {
             proxyBase = PUBLIC_PROXY_URL.endsWith('/') ? `${PUBLIC_PROXY_URL}?url=` : `${PUBLIC_PROXY_URL}/?url=`;
         } else {
             // Fallback to deriving it from the current Host header
-            // Fix for bug 2: Use ADDON_PORT instead of the current PORT for rewritten links
             const proxyHost = host.replace(`:${PORT}`, `:${ADDON_PORT}`);
             proxyBase = `${protocol}://${proxyHost}/?url=`;
         }
 
         // 2. Process the XML
         const parsedIgnoreList = ignoreParam ? ignoreParam.split(',').filter(Boolean) : [];
+        const parsedRemoveClasses = removeClassesParam ? removeClassesParam.split(',').filter(Boolean) : [];
         const processedXml = await processXml(xml, targetUrl, domain, proxyBase, {
             ignoreList: parsedIgnoreList,
             imgSelector,
-            directFetch
+            directFetch,
+            removeClasses: parsedRemoveClasses
         });
 
         // 3. Return the processed XML
@@ -342,6 +348,15 @@ app.get('/', async (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`XML Processor listening on port ${PORT}`);
-});
+if (require.main === module) {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`XML Processor listening on port ${PORT}`);
+    });
+}
+
+module.exports = {
+    rewriteUrl,
+    processXml,
+    isXml,
+    app
+};
