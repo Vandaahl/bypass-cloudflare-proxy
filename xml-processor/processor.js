@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const https = require('https');
+const cheerio = require('cheerio');
 const app = express();
 
 const PORT = parseInt(process.env.PORT) || 5004;
@@ -110,92 +111,51 @@ function rewriteUrl(url, targetUrl, domain, proxyBase) {
 
 /**
  * Extracts image URL from HTML content based on a selector.
- * Since we don't have an HTML parser, we use a basic regex approach for ID/class selectors.
+ * Uses Cheerio for reliable HTML parsing.
  */
 function extractImageUrl(html, selector) {
     if (!html || !selector) return null;
 
-    let searchPattern;
-    if (selector.startsWith('#')) {
-        // Find img element by id
-        const id = selector.substring(1);
-        searchPattern = new RegExp(`<img[^>]+id=["']${id}["'][^>]*src=["']([^"']+)["']`, 'i');
-    } else if (selector.startsWith('.')) {
-        // Find img element by class
-        const className = selector.substring(1);
-        searchPattern = new RegExp(`<img[^>]+class=["'][^"']*${className}[^"']*["'][^>]*src=["']([^"']+)["']`, 'i');
-    } else {
-        // Treat as tag name (e.g., 'img')
-        searchPattern = new RegExp(`<${selector}[^>]*src=["']([^"']+)["']`, 'i');
+    const $ = cheerio.load(html);
+    const element = $(selector);
+    
+    if (element.length === 0) return null;
+
+    // If the element itself is an img, return its src
+    if (element.is('img')) {
+        return element.attr('src');
     }
 
-    const match = html.match(searchPattern);
-    if (match) return match[1];
-
-    // Try a more flexible search for img tags that contain the ID/class anywhere
-    if (selector.startsWith('#')) {
-        const id = selector.substring(1);
-        const flexMatch = html.match(new RegExp(`<img[^>]+id=["']${id}["']`, 'i'));
-        if (flexMatch) {
-            const imgTag = flexMatch[0];
-            const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
-            if (srcMatch) return srcMatch[1];
-        }
-    } else if (selector.startsWith('.')) {
-        const className = selector.substring(1);
-        const flexMatch = html.match(new RegExp(`<img[^>]+class=["'][^"']*${className}[^"']*["']`, 'i'));
-        if (flexMatch) {
-            const imgTag = flexMatch[0];
-            const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
-            if (srcMatch) return srcMatch[1];
-        }
-    }
-
-    // If no img match found, try to find a parent element matching the selector
-    // and then find the first img inside it.
-    let parentContent = null;
-    if (selector.startsWith('#')) {
-        const id = selector.substring(1);
-        // Find any tag with this id and capture its content
-        // This is tricky with regex due to nested tags, but we'll try to find the opening tag and some following content
-        const parentMatch = html.match(new RegExp(`<([a-z0-9]+)[^>]+id=["']${id}["'][^>]*>([\\s\\S]*?)</\\1>`, 'i'));
-        if (parentMatch) {
-            parentContent = parentMatch[2];
-        }
-    } else if (selector.startsWith('.')) {
-        const className = selector.substring(1);
-        // Find any tag with this class and capture its content
-        const parentMatch = html.match(new RegExp(`<([a-z0-9]+)[^>]+class=["'][^"']*${className}[^"']*["'][^>]*>([\\s\\S]*?)</\\1>`, 'i'));
-        if (parentMatch) {
-            parentContent = parentMatch[2];
-        }
-    }
-
-    if (parentContent) {
-        const innerImgMatch = parentContent.match(/<img[^>]+src=["']([^"']+)["']/i);
-        if (innerImgMatch) return innerImgMatch[1];
+    // Otherwise, find the first img inside it
+    const innerImg = element.find('img').first();
+    if (innerImg.length > 0) {
+        return innerImg.attr('src');
     }
 
     return null;
 }
 
 /**
- * Scrapes an image from a link and adds it to the item block.
+ * Scrapes an image from a link and adds it to the item element.
+ * item is a Cheerio element representing an <item> or <entry>.
  */
-async function addImageToItem(itemBlock, selector, targetUrl, domain, proxyBase, directFetch) {
+async function addImageToCheerioItem(item, selector, targetUrl, domain, proxyBase, directFetch) {
     // Check if it already has an image (enclosure or media:content or img tag)
-    if (/<enclosure\b[^>]*\btype=["']image\/[^"']+["'][^>]*>/i.test(itemBlock) ||
-        /<media:content\b[^>]*\bmedium=["']image["'][^>]*>/i.test(itemBlock) ||
-        /<img\b[^>]*>/i.test(itemBlock)) {
-        return itemBlock;
+    if (item.find('enclosure[type^="image/"]').length > 0 ||
+        item.find('media\\:content[medium="image"]').length > 0 ||
+        item.find('img').length > 0) {
+        return;
     }
 
     // Find the link
-    const linkMatch = itemBlock.match(/<link>([^<]+)<\/link>/i);
-    if (!linkMatch) return itemBlock;
-
-    let itemLink = linkMatch[1].trim();
+    let itemLink = item.find('link').first().text().trim();
+    if (!itemLink) {
+        // Atom uses <link href="...">
+        itemLink = item.find('link').first().attr('href');
+    }
     
+    if (!itemLink) return;
+
     // If it's already proxied, extract the original URL
     if (itemLink.startsWith(proxyBase)) {
         try {
@@ -205,7 +165,7 @@ async function addImageToItem(itemBlock, selector, targetUrl, domain, proxyBase,
         }
     }
     
-    if (!itemLink.startsWith('http')) return itemBlock;
+    if (!itemLink.startsWith('http')) return;
 
     try {
         // Fetch the linked page (using proxy if not direct)
@@ -215,99 +175,92 @@ async function addImageToItem(itemBlock, selector, targetUrl, domain, proxyBase,
 
         console.log(`Scraping image for item: ${itemLink} using selector: ${selector}`);
         const response = await httpGet(fetchUrl);
-        if (response.status !== 200) return itemBlock;
+        if (response.status !== 200) return;
 
         let imageUrl = extractImageUrl(response.data, selector);
         if (imageUrl) {
-            // Fix for bug 1: If the image URL is already proxied by the internal proxy, un-proxy it first
-            // to avoid internal Docker hostnames leaking into the XML.
+            // Un-proxy if it's already proxied by internal/external proxy
             const internalProxyBase = `${PROXY_URL}/?url=`;
             if (imageUrl.startsWith(internalProxyBase)) {
-                try {
-                    imageUrl = decodeURIComponent(imageUrl.substring(internalProxyBase.length));
-                } catch (e) {
-                    console.warn(`Failed to decode internal proxied image URL: ${imageUrl}`);
-                }
+                imageUrl = decodeURIComponent(imageUrl.substring(internalProxyBase.length));
             } else if (imageUrl.startsWith(proxyBase)) {
-                try {
-                    imageUrl = decodeURIComponent(imageUrl.substring(proxyBase.length));
-                } catch (e) {
-                    console.warn(`Failed to decode proxied image URL: ${imageUrl}`);
-                }
+                imageUrl = decodeURIComponent(imageUrl.substring(proxyBase.length));
             }
 
             const absoluteImageUrl = new URL(imageUrl, itemLink).href;
             const proxiedImageUrl = rewriteUrl(absoluteImageUrl, targetUrl, domain, proxyBase);
             
             // Add as enclosure
-            const enclosure = `\n        <enclosure url="${proxiedImageUrl}" length="0" type="image/jpeg" />`;
-            // Insert enclosure before </item>
-            return itemBlock.replace(/<\/item>/i, `${enclosure}\n    </item>`);
+            item.append(`\n        <enclosure url="${proxiedImageUrl}" length="0" type="image/jpeg" />\n    `);
         }
     } catch (e) {
         console.warn(`Failed to scrape image for ${itemLink}: ${e.message}`);
     }
-
-    return itemBlock;
 }
 
 /**
- * Rewrites URLs within an XML string (e.g., RSS feed <link> tags).
+ * Process the XML using Cheerio: filter, rewrite URLs, and scrape images.
  */
-function rewriteXml(xml, targetUrl, domain, proxyBase) {
-    // Rewrite <link>...</link> tags content if they contain URLs
-    let rewritten = xml.replace(/<link>([^<]+)<\/link>/gi, (match, url) => {
-        const trimmedUrl = url.trim();
-        if (!trimmedUrl || !trimmedUrl.startsWith('http')) {
-            return match;
+async function processXml(xml, targetUrl, domain, proxyBase, options = {}) {
+    const { ignoreList = [], imgSelector = '', directFetch = false } = options;
+    
+    // Load XML with xmlMode: true to preserve tags and casing
+    const $ = cheerio.load(xml, { xmlMode: true });
+
+    // 1. Filter items by category
+    if (ignoreList.length > 0) {
+        const normalizedIgnore = ignoreList.map(v => v.toLowerCase());
+        $('item, entry').each((i, el) => {
+            const item = $(el);
+            const categories = item.find('category').map((j, cat) => {
+                let val = $(cat).text().trim().toLowerCase();
+                return val;
+            }).get();
+
+            const shouldRemove = categories.some(cat => normalizedIgnore.includes(cat));
+            if (shouldRemove) {
+                item.remove();
+            }
+        });
+    }
+
+    // 2. Rewrite URLs
+    $('link, url, enclosure').each((i, el) => {
+        const $el = $(el);
+        const tagName = el.tagName.toLowerCase();
+
+        if (tagName === 'enclosure') {
+            const url = $el.attr('url');
+            if (url) {
+                $el.attr('url', rewriteUrl(url, targetUrl, domain, proxyBase));
+            }
+        } else {
+            // For <link> and <url>
+            let url = $el.text().trim();
+            if (url.startsWith('http')) {
+                $el.text(rewriteUrl(url, targetUrl, domain, proxyBase));
+            }
+            // Atom links: <link href="..." />
+            const href = $el.attr('href');
+            if (href && href.startsWith('http')) {
+                $el.attr('href', rewriteUrl(href, targetUrl, domain, proxyBase));
+            }
         }
-        return `<link>${rewriteUrl(trimmedUrl, targetUrl, domain, proxyBase)}</link>`;
     });
 
-    // Also handle other common URL patterns in RSS/XML
-    // <url>...</url>
-    rewritten = rewritten.replace(/<url>([^<]+)<\/url>/gi, (match, url) => {
-        const trimmedUrl = url.trim();
-        if (!trimmedUrl || !trimmedUrl.startsWith('http')) {
-            return match;
+    // 3. Scrape images if requested
+    if (imgSelector) {
+        const items = $('item, entry').toArray();
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < items.length; i += BATCH_SIZE) {
+            const batch = items.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(item => 
+                addImageToCheerioItem($(item), imgSelector, targetUrl, domain, proxyBase, directFetch)
+            ));
         }
-        return `<url>${rewriteUrl(trimmedUrl, targetUrl, domain, proxyBase)}</url>`;
-    });
+    }
 
-    // <enclosure url="..." ... />
-    rewritten = rewritten.replace(/(<enclosure\b[^>]*\burl=["'])([^"']+)(["'][^>]*>)/gi, (match, start, url, end) => {
-        return `${start}${rewriteUrl(url, targetUrl, domain, proxyBase)}${end}`;
-    });
-
-    return rewritten;
-}
-
-/**
- * Filters XML by category
- */
-function filterXmlByCategory(xml, ignoreList) {
-    if (!ignoreList.length) return xml;
-
-    const normalizedIgnore = ignoreList.map(v => v.toLowerCase());
-
-    return xml.replace(/<item\b[^>]*>[\s\S]*?<\/item>/gi, (itemBlock) => {
-        const categories = [...itemBlock.matchAll(/<category[^>]*>([\s\S]*?)<\/category>/gi)]
-            .map(match => {
-                let value = match[1].trim();
-
-                // Strip CDATA if present
-                const cdataMatch = value.match(/^<!\[CDATA\[(.*)\]\]>$/i);
-                if (cdataMatch) {
-                    value = cdataMatch[1];
-                }
-
-                return value.trim().toLowerCase();
-            });
-
-        const shouldRemove = categories.some(cat => normalizedIgnore.includes(cat));
-
-        return shouldRemove ? '' : itemBlock;
-    });
+    return $.xml();
 }
 
 app.use(cors());
@@ -371,47 +324,12 @@ app.get('/', async (req, res) => {
         }
 
         // 2. Process the XML
-        let processedXml = xml;
         const parsedIgnoreList = ignoreParam ? ignoreParam.split(',').filter(Boolean) : [];
-
-        if (parsedIgnoreList.length > 0) {
-            processedXml = filterXmlByCategory(processedXml, parsedIgnoreList);
-        }
-
-        processedXml = rewriteXml(processedXml, targetUrl, domain, proxyBase);
-        
-        // 2.5. Scrape images for items if imgSelector is provided
-        if (imgSelector) {
-            const regex = /<item\b[^>]*>[\s\S]*?<\/item>/gi;
-            const itemMatches = [...processedXml.matchAll(regex)];
-            
-            if (itemMatches.length > 0) {
-                // Collect all new item contents
-                const newItemContents = [];
-                const BATCH_SIZE = 5;
-                for (let i = 0; i < itemMatches.length; i += BATCH_SIZE) {
-                    const batch = itemMatches.slice(i, i + BATCH_SIZE);
-                    const results = await Promise.all(batch.map(m => 
-                        addImageToItem(m[0], imgSelector, targetUrl, domain, proxyBase, directFetch)
-                    ));
-                    newItemContents.push(...results);
-                }
-                
-                // Rebuild XML using matches' positions
-                let resultXml = '';
-                let offset = 0;
-                for (let i = 0; i < itemMatches.length; i++) {
-                    const match = itemMatches[i];
-                    const start = match.index;
-                    const end = start + match[0].length;
-                    
-                    resultXml += processedXml.substring(offset, start) + newItemContents[i];
-                    offset = end;
-                }
-                resultXml += processedXml.substring(offset);
-                processedXml = resultXml;
-            }
-        }
+        const processedXml = await processXml(xml, targetUrl, domain, proxyBase, {
+            ignoreList: parsedIgnoreList,
+            imgSelector,
+            directFetch
+        });
 
         // 3. Return the processed XML
         res.set('Content-Type', 'application/xml');
