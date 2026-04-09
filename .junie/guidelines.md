@@ -2,14 +2,11 @@
 
 ## Build/Configuration Instructions
 
-### Prerequisites
-- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/) installed.
-- [Node.js](https://nodejs.org/) (v22+) and [pnpm](https://pnpm.io/) for local development.
+### Docker Setup (Primary)
+The project runs in a triple-service Docker setup. **Junie does not have Node.js or pnpm installed locally and must perform all development and testing tasks within Docker.**
 
-### Docker Setup
-The project is designed to run in a triple-service Docker setup:
 1.  **Unflare**: Headless browser API (Puppeteer) for Cloudflare bypass.
-2.  **Addon Proxy**: Lightweight Node.js server to proxy requests using Unflare clearance.
+2.  **Addon Proxy** (`bypass-cloudflare-proxy`): Lightweight Node.js server to proxy requests using Unflare clearance.
 3.  **XML Processor**: Specialized service for handling and modifying XML requests. It can fetch content through the Addon Proxy or directly from a target URL.
 
 To start all services:
@@ -17,26 +14,13 @@ To start all services:
 docker-compose up -d
 ```
 
-### Local Development (Unflare Service)
-1.  **Install dependencies**:
-    ```bash
-    pnpm install
-    ```
-2.  **Configuration**:
-    Create a `.env.development` file in the root based on `src/common/utils/envConfig.ts`.
-    Example:
-    ```env
-    NODE_ENV=development
-    HOST=localhost
-    PORT=5002
-    CORS_ORIGIN=http://localhost:3000
-    COMMON_RATE_LIMIT_MAX_REQUESTS=1000
-    COMMON_RATE_LIMIT_WINDOW_MS=1000
-    ```
-3.  **Run in development mode**:
-    ```bash
-    pnpm dev
-    ```
+### Development within Docker
+When you need to run commands (like installing dependencies or linting), use `docker-compose run` or `docker-compose exec`:
+
+```bash
+docker-compose run unflare pnpm install
+docker-compose run unflare pnpm lint
+```
 
 ### Configuration Details
 - Environment variables are validated using `envalid` in `src/common/utils/envConfig.ts`.
@@ -46,16 +30,17 @@ docker-compose up -d
 
 ## Testing Information
 
-### Configuring and Running Tests
-The project uses [Vitest](https://vitest.dev/) for testing.
+### Running Tests
+The project uses [Vitest](https://vitest.dev/) for testing. **Always run tests inside the Docker container.**
 
-- **Run tests locally**:
-  ```bash
-  pnpm test
-  ```
-- **Run tests inside Docker**:
+- **Run all tests**:
   ```bash
   docker-compose run unflare pnpm test
+  ```
+
+- **Run a specific test file**:
+  ```bash
+  docker-compose run unflare pnpm test -- src/example.test.ts
   ```
 
 ### Guidelines for Adding and Executing New Tests
@@ -74,9 +59,9 @@ describe('Simple Math', () => {
     });
 });
 ```
-Execute it:
+Execute it inside Docker:
 ```bash
-pnpm test -- src/example.test.ts
+docker-compose run unflare pnpm test -- src/example.test.ts
 ```
 
 ---
