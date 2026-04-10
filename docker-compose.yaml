@@ -29,7 +29,7 @@ services:
       - "5004:5004"
     environment:
       - PORT=5004
-      - ADDON_HOST=${ADDON_HOST:-bypass-cloudflare-proxy}
+      - ADDON_HOST=bypass-cloudflare-proxy
       - ADDON_PORT=${ADDON_PORT:-5003}
       - PUBLIC_PROXY_URL=${PUBLIC_PROXY_URL:-}
     depends_on:

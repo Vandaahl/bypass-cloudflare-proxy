@@ -6,7 +6,7 @@ const cheerio = require('cheerio');
 const app = express();
 
 const PORT = parseInt(process.env.PORT) || 5004;
-const ADDON_HOST = process.env.ADDON_HOST || 'bypass-cloudflare-proxy';
+const ADDON_HOST = process.env.ADDON_HOST || 'localhost';
 const ADDON_PORT = parseInt(process.env.ADDON_PORT) || 5003;
 const PROXY_URL = process.env.PROXY_URL || `http://${ADDON_HOST}:${ADDON_PORT}`;
 // PUBLIC_PROXY_URL: Optional public URL of the Addon Proxy (e.g., https://proxy.example.com)

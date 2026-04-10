@@ -114,11 +114,13 @@ XML_PROCESSOR_PORT=5004
 #### Environment Variables
 
 - `UNFLARE_URL`: The URL of the Unflare service (default: `http://unflare:5002`).
+- `ADDON_HOST`: The internal hostname of the Addon Proxy service (default: `localhost` for Podman Pods, `bypass-cloudflare-proxy` in Docker Compose).
 - `ADDON_PORT`: The port the proxy service listens on (default: `5003`).
 - `DOMAIN_WHITELIST`: Optional comma-separated list of domains that are allowed to be proxied.
 - `PROXY_URL`: The internal URL of the Addon Proxy (for XML Processor) (default: `http://bypass-cloudflare-proxy:5003`).
 - `PUBLIC_PROXY_URL`: Optional. The public URL of the Addon Proxy. If set, XML link rewriting will use this base. If not set, it is derived from the request host.
-- `XML_PROCESSOR_PORT`: The port the XML Processor listens on (default: `5004`).
+#### Note for Podman Pods
+If you are running these services in a single **Podman Pod**, they share the same network namespace and should communicate via `localhost`. Ensure `ADDON_HOST` is set to `localhost` in your environment files or Quadlet definitions.
 
 ## Project Structure
 
