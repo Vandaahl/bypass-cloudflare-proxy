@@ -6,8 +6,9 @@ const cheerio = require('cheerio');
 const app = express();
 
 const PORT = parseInt(process.env.PORT) || 5004;
+const ADDON_HOST = process.env.ADDON_HOST || 'bypass-cloudflare-proxy';
 const ADDON_PORT = parseInt(process.env.ADDON_PORT) || 5003;
-const PROXY_URL = process.env.PROXY_URL || 'http://bypass-cloudflare-proxy:5003';
+const PROXY_URL = process.env.PROXY_URL || `http://${ADDON_HOST}:${ADDON_PORT}`;
 // PUBLIC_PROXY_URL: Optional public URL of the Addon Proxy (e.g., https://proxy.example.com)
 // If not set, it will be derived from the Host header.
 const PUBLIC_PROXY_URL = process.env.PUBLIC_PROXY_URL || '';
@@ -287,7 +288,12 @@ app.get('/', async (req, res) => {
             : `${PROXY_URL}/?url=${encodeURIComponent(targetUrl)}`;
 
         console.log(`Fetching XML from: ${fetchUrl} (direct: ${directFetch})`);
-        const proxyResponse = await httpGet(fetchUrl);
+        const proxyResponse = await httpGet(fetchUrl).catch(err => {
+            if (err.code === 'ECONNREFUSED') {
+                throw new Error(`Could not connect to proxy at ${PROXY_URL}. Ensure the bypass-cloudflare-proxy service is running and accessible. (Error: ${err.message})`);
+            }
+            throw err;
+        });
 
         const contentType = proxyResponse.headers['content-type'] || '';
         let xml = proxyResponse.data;
@@ -323,8 +329,9 @@ app.get('/', async (req, res) => {
             proxyBase = PUBLIC_PROXY_URL.endsWith('/') ? `${PUBLIC_PROXY_URL}?url=` : `${PUBLIC_PROXY_URL}/?url=`;
         } else {
             // Fallback to deriving it from the current Host header
-            const proxyHost = host.replace(`:${PORT}`, `:${ADDON_PORT}`);
-            proxyBase = `${protocol}://${proxyHost}/?url=`;
+            // If we are behind a reverse proxy, the Host header is usually the external domain.
+            // We want the rewritten URLs in the XML to point to the same external domain.
+            proxyBase = `${protocol}://${host}/?url=`;
         }
 
         // 2. Process the XML
