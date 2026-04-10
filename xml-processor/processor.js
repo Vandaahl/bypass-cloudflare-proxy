@@ -356,8 +356,19 @@ app.get('/', async (req, res) => {
 });
 
 if (require.main === module) {
-    app.listen(PORT, '0.0.0.0', () => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`XML Processor listening on port ${PORT}`);
+        console.log(`Configured Addon Host: ${ADDON_HOST}`);
+        console.log(`Configured Addon Port: ${ADDON_PORT}`);
+        console.log(`Internal Proxy URL: ${PROXY_URL}`);
+    });
+
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`Port ${PORT} is already in use.`);
+        } else {
+            console.error(`Server error: ${err.message}`);
+        }
     });
 }
 
