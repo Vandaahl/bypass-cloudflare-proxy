@@ -45,7 +45,6 @@ function httpGet(url) {
                 });
             });
         }).on('error', (err) => {
-            console.error(`Network error for URL ${url}:`, err);
             reject(err);
         });
     });
@@ -290,11 +289,10 @@ app.get('/', async (req, res) => {
 
         console.log(`Fetching XML from: ${fetchUrl} (direct: ${directFetch})`);
         const proxyResponse = await httpGet(fetchUrl).catch(err => {
-            const errStr = JSON.stringify(err, Object.getOwnPropertyNames(err));
             if (err.code === 'ECONNREFUSED') {
-                throw new Error(`Could not connect to proxy at ${PROXY_URL}. Ensure the bypass-cloudflare-proxy service is running and accessible. (Error: ${errStr})`);
+                throw new Error(`Could not connect to proxy at ${PROXY_URL}. Ensure the bypass-cloudflare-proxy service is running and accessible. (Error: ${err.message})`);
             }
-            throw new Error(`Error fetching XML: ${errStr}`);
+            throw err;
         });
 
         const contentType = proxyResponse.headers['content-type'] || '';

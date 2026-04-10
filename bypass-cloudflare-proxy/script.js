@@ -341,12 +341,8 @@ app.get('/', async (req, res) => {
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-    const addr = server.address();
-    const bind = typeof addr === 'string' ? 'pipe ' + addr : 'port ' + addr.port;
-    const host = typeof addr === 'string' ? 'N/A' : addr.address;
-    console.log(`Unflare Add-on Script listening on ${host}:${bind}`);
+    console.log(`Unflare Add-on Script listening on port ${PORT}`);
     console.log(`Using Unflare service at ${UNFLARE_URL}`);
-    console.log(`Configured PORT: ${PORT}`);
 });
 
 server.on('error', (err) => {
