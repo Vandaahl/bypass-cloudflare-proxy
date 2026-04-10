@@ -123,11 +123,10 @@ XML_PROCESSOR_PORT=5004
 ## Project Structure
 
 - `Dockerfile`: Build instructions for the heavy Unflare service (includes Chromium).
-- `Dockerfile.addon`: Build instructions for the lightweight Proxy service.
+- `bypass-cloudflare-proxy/`: Source code and Dockerfile for the lightweight Proxy service.
 - `xml-processor/`: Source code and Dockerfile for the XML Processor service.
-- `script.js`: The main logic for the Proxy service (URL rewriting, caching, and proxying).
 - `src/`: Source code for the TypeScript-based Unflare service.
-- `docker-compose.yaml`: Orchestrates both services.
+- `docker-compose.yaml`: Orchestrates all services.
 
 ## License
 

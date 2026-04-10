@@ -8,10 +8,8 @@ services:
 
   bypass-cloudflare-proxy:
     build:
-      context: .
-      dockerfile: Dockerfile.addon
+      context: ./bypass-cloudflare-proxy
     container_name: bypass-cloudflare-proxy
-    command: node script.js
     ports:
       - "5003:5003"
     environment:
@@ -21,7 +19,7 @@ services:
     depends_on:
       - unflare
     volumes:
-      - ./script.js:/usr/src/app/script.js
+      - ./bypass-cloudflare-proxy/script.js:/usr/src/app/script.js
 
   xml-processor:
     build:
